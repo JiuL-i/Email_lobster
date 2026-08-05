@@ -1915,6 +1915,50 @@ class MailLobsterIMAP:
     #                         总结流程                                     #
     # ================================================================== #
 
+    def _build_daily_brief(self, summary_time: str, emails_data: List[Dict], time_range: str) -> str:
+        """构建 17:00 群聊简化简报：仅统计 0/1/2 级，按店铺（owner）逐行列出数量，不合并"""
+        key_emails = [e for e in emails_data if self._safe_level(e.get('level', 6)) <= 2]
+        if not key_emails:
+            return ''
+
+        # 按 owner 分组统计各级别数量
+        owner_levels = {}
+        for e in key_emails:
+            ow = e.get('owner', '未分配')
+            lv = self._safe_level(e.get('level', 6))
+            owner_levels.setdefault(ow, {})
+            owner_levels[ow][lv] = owner_levels[ow].get(lv, 0) + 1
+
+        # 有 0 级的店铺排最前，其次按 1 级、2 级数量排序
+        sorted_owners = sorted(
+            owner_levels,
+            key=lambda ow: (-owner_levels[ow].get(0, 0),
+                            -owner_levels[ow].get(1, 0),
+                            -owner_levels[ow].get(2, 0), ow)
+        )
+
+        level_emoji = {0: '🔴', 1: '🟠', 2: '🟡'}
+        date_str = self._format_summary_date(time_range)
+
+        lines = [
+            f"【{summary_time} 全平台简报】{date_str}",
+            f"时段：{time_range}",
+            '',
+        ]
+        totals = {0: 0, 1: 0, 2: 0}
+        for ow in sorted_owners:
+            parts = []
+            for lv in (0, 1, 2):
+                cnt = owner_levels[ow].get(lv, 0)
+                if cnt:
+                    parts.append(f"{level_emoji[lv]}{lv}级 x{cnt}")
+                    totals[lv] += cnt
+            lines.append(f"▪ {ow}：{' '.join(parts)}")
+
+        lines.append('')
+        lines.append(f"合计 {sum(totals.values())} 封（0级 {totals[0]} / 1级 {totals[1]} / 2级 {totals[2]}）")
+        return '\n'.join(lines)
+
     def _dispatch_summary(self, emails_data: List[Dict], summary_time: str, time_range: str):
         """
         公共总结分发逻辑：按平台拆分 → 按负责人推送 → 其他平台路由 → 21:00 日总结 → 保存 Excel
