@@ -1,0 +1,41 @@
+# 敏感配置（含邮箱密码）
+config_imap_forward.json
+
+# 运行时数据
+state/
+backup/
+reports/
+mail_lobster_imap.log
+
+# 运行时生成的 prompt
+**/learned_rules.txt
+**/versions/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 临时文件
+负责人)
