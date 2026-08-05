@@ -539,7 +539,7 @@ class MailLobsterIMAP:
                         'time': str(ws.cell(row=row, column=2).value or ''),
                         'source_email': str(ws.cell(row=row, column=3).value or ''),
                         'owner': str(ws.cell(row=row, column=4).value or ''),
-                        'level': (lambda v: int(v) if v and str(v).isdigit() else 6)(ws.cell(row=row, column=5).value),
+                        'level': self._safe_level(ws.cell(row=row, column=5).value),
                         'sub_category': str(ws.cell(row=row, column=6).value or '其他'),
                         'platform': self.platform_normalize.get(
                             str(ws.cell(row=row, column=7).value or 'OTH'),
