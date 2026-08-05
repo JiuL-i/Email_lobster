@@ -573,7 +573,7 @@ class MailLobsterIMAP:
                     'time': str(ws.cell(row=row, column=2).value or ''),
                     'source_email': str(ws.cell(row=row, column=3).value or ''),
                     'owner': str(ws.cell(row=row, column=4).value or ''),
-                    'level': (lambda v: int(v) if v and str(v).isdigit() else 6)(ws.cell(row=row, column=5).value),
+                    'level': self._safe_level(ws.cell(row=row, column=5).value),
                     'sub_category': str(ws.cell(row=row, column=6).value or '其他'),
                     'platform': self.platform_normalize.get(
                         str(ws.cell(row=row, column=7).value or 'OTH'),
@@ -2103,12 +2103,18 @@ class MailLobsterIMAP:
                     self.send_feishu_private(summary_text, handler)
                     logger.info(f"📊 其他平台总结已发送给 [{handler}]（{len(other_emails)} 封）")
 
-        # ★ 17:00 额外发送全平台简化简报到群聊（仅 0/1/2 级数量，按店铺逐行）
+        # ★ 17:00 额外发送全平台简化简报到群聊（昨天 17:00 ~ 今天 17:00，仅 0/1/2 级数量，按店铺逐行）
         if summary_time == '17:00':
-            brief_content = self._build_daily_brief(summary_time, emails_data, time_range)
+            brief_emails = self._get_daily_brief_emails()
+            if not brief_emails:
+                brief_emails = emails_data  # 兜底：周期文件不可用时退回当前周期数据
+            today = datetime.now().strftime('%Y-%m-%d')
+            yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+            brief_range = f"{yesterday} 17:00 ~ {today} 17:00"
+            brief_content = self._build_daily_brief(summary_time, brief_emails, brief_range)
             if brief_content:
                 self.send_feishu_bot(brief_content)
-                logger.info(f"📊 17:00 全平台简报已发送到群聊")
+                logger.info(f"📊 17:00 全平台简报已发送到群聊（24h 数据源）")
 
         # ★ 21:00 额外发送全平台日总结到群聊
         if summary_time == '21:00':
