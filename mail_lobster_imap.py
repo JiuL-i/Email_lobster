@@ -558,6 +558,78 @@ class MailLobsterIMAP:
         logger.info(f"📊 周总结数据源：{len(excel_files)} 个周期文件，{len(emails)} 封邮件（近7天）")
         return emails
 
+    def _read_cycle_emails(self, filepath: Path, seen_fingerprints: set) -> List[Dict]:
+        """读取单个周期 Excel 文件中的邮件记录（按指纹跨文件去重）"""
+        emails = []
+        try:
+            wb = load_workbook(filepath, read_only=True)
+            ws = wb.active
+            for row in range(2, (ws.max_row or 1) + 1):
+                date_val = ws.cell(row=row, column=1).value
+                if date_val is None:
+                    continue
+                record = {
+                    'date': str(date_val or ''),
+                    'time': str(ws.cell(row=row, column=2).value or ''),
+                    'source_email': str(ws.cell(row=row, column=3).value or ''),
+                    'owner': str(ws.cell(row=row, column=4).value or ''),
+                    'level': (lambda v: int(v) if v and str(v).isdigit() else 6)(ws.cell(row=row, column=5).value),
+                    'sub_category': str(ws.cell(row=row, column=6).value or '其他'),
+                    'platform': self.platform_normalize.get(
+                        str(ws.cell(row=row, column=7).value or 'OTH'),
+                        str(ws.cell(row=row, column=7).value or 'OTH')),
+                    'category': str(ws.cell(row=row, column=8).value or ''),
+                    'from': str(ws.cell(row=row, column=9).value or ''),
+                    'subject': str(ws.cell(row=row, column=10).value or ''),
+                    'ai_summary': str(ws.cell(row=row, column=11).value or ''),
+                    'ai_action': str(ws.cell(row=row, column=12).value or ''),
+                    'preview': str(ws.cell(row=row, column=13).value or ''),
+                }
+                fp = self._content_fingerprint(record)
+                if fp in seen_fingerprints:
+                    continue
+                seen_fingerprints.add(fp)
+                emails.append(record)
+            wb.close()
+        except Exception as e:
+            logger.error(f"❌ 读取周期文件 {filepath.name} 失败: {e}")
+        return emails
+
+    def _get_daily_brief_emails(self) -> List[Dict]:
+        """
+        读取 17:00 简报的数据源：昨天 17:00 ~ 今天 17:00 的全部邮件（24 小时，所有店铺）。
+        数据来源：昨天 17:00 之后的周期文件 + 今天 17:00 及之前的周期文件，
+        并合并内存中的当前周期邮件（兜底周期文件尚未写入的情况）。
+        """
+        today = datetime.now().strftime('%Y-%m-%d')
+        yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        brief_end_minutes = 17 * 60  # 17:00
+
+        # slot > 17:00（如 21:00）取昨天的文件；slot <= 17:00 取今天的文件
+        target_files = []
+        cycle_dir = Path(self.config.get('reports', {}).get('cycle_dir', 'reports/cycles'))
+        for slot in self._get_summary_slots():
+            date_str = yesterday if slot['minutes'] > brief_end_minutes else today
+            filepath = cycle_dir / f"slot_{slot['time'].replace(':', '')}_{date_str}.xlsx"
+            if filepath.exists():
+                target_files.append(filepath)
+
+        emails = []
+        seen_fingerprints = set()
+        for filepath in sorted(target_files):
+            emails.extend(self._read_cycle_emails(filepath, seen_fingerprints))
+
+        # 合并内存中的当前周期邮件（同轮去重）
+        for record in self.current_cycle_emails:
+            fp = self._content_fingerprint(record)
+            if fp in seen_fingerprints:
+                continue
+            seen_fingerprints.add(fp)
+            emails.append(record)
+
+        logger.info(f"📊 17:00 简报数据源：{len(target_files)} 个周期文件，{len(emails)} 封邮件（24h）")
+        return emails
+
     def _format_summary_period(self, summary_time: str, time_range: str, platform_name: str = '') -> str:
         """生成总结头部：如 '7月20日 早' 或 '7月20日 全天'"""
         date_str = self._format_summary_date(time_range)
