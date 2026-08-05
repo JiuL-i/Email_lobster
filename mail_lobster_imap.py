@@ -2031,6 +2031,13 @@ class MailLobsterIMAP:
                     self.send_feishu_private(summary_text, handler)
                     logger.info(f"📊 其他平台总结已发送给 [{handler}]（{len(other_emails)} 封）")
 
+        # ★ 17:00 额外发送全平台简化简报到群聊（仅 0/1/2 级数量，按店铺逐行）
+        if summary_time == '17:00':
+            brief_content = self._build_daily_brief(summary_time, emails_data, time_range)
+            if brief_content:
+                self.send_feishu_bot(brief_content)
+                logger.info(f"📊 17:00 全平台简报已发送到群聊")
+
         # ★ 21:00 额外发送全平台日总结到群聊
         if summary_time == '21:00':
             if emails_data:
