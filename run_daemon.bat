@@ -1,21 +1,36 @@
 @echo off
-title Mail Lobster v2 - ÊØ»¤½ø³Ì
+title Mail Lobster v2 - GUI Launcher
 cd /d "%~dp0"
+
+REM ============================================================
+REM ä¼˜å…ˆå¯åŠ¨æ‰“åŒ…å¥½çš„ GUI å¯åŠ¨å™¨ (mail_lobster.exe)ï¼›
+REM æœªæ‰“åŒ…æ—¶é€€å›åˆ°åŸå§‹çš„ python å®ˆæŠ¤è¿›ç¨‹æ¨¡å¼ï¼Œä¾¿äºå¼€å‘è°ƒè¯•ã€‚
+REM ============================================================
+
+set EXE_PATH=dist\mail_lobster\mail_lobster.exe
+
+if exist "%EXE_PATH%" (
+    echo å¯åŠ¨ GUI ç›‘æ§é¢æ¿: %EXE_PATH%
+    "%EXE_PATH%"
+    goto :end
+)
 
 echo.
 echo  ============================================
-echo    Mail Lobster v2 - ÊØ»¤½ø³ÌÄ£Ê½
+echo    Mail Lobster v2 - å®ˆæŠ¤è¿›ç¨‹æ¨¡å¼ï¼ˆå¼€å‘å›é€€ï¼‰
 echo  ============================================
 echo.
-echo   ¼ì²é¼ä¸ô:  Ã¿ 5 ·ÖÖÓ
-echo   ¶¨Ê±×Ü½á:  07:30 / 11:30 / 17:00 / 21:00
-echo   ÖÜ×Ü½á:    ÖÜÁù 17:00
+echo   æ£€æŸ¥é—´éš”:   æ¯ 5 åˆ†é’Ÿ
+echo   å®šæ—¶æ€»ç»“:   07:30 / 11:30 / 17:00 / 21:00
+echo   å‘¨  æ€»  ç»“:  å‘¨å…­ 17:00
 echo.
-echo   °´ Ctrl+C ÍË³ö
+echo   æŒ‰ Ctrl+C é€€å‡º
 echo  --------------------------------------------
 echo.
 python -X utf8 mail_lobster_imap.py
 echo.
-echo  [ÒÑÍ£Ö¹] ÊØ»¤½ø³ÌÒÑÍË³ö
+echo  [å·²åœæ­¢] å®ˆæŠ¤è¿›ç¨‹å·²é€€å‡º
 pause
 
+:end
+endlocal
