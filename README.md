@@ -241,6 +241,48 @@ python mail_lobster_imap.py --test-feishu-app # 测试私聊推送
 
 该保护针对同一程序安装目录。不要复制多份程序并让它们同时连接同一个汇总邮箱；不同目录的锁彼此独立。
 
+#### 退出码速查
+
+| 退出码 | 含义 | .bat 表现 |
+|---|---|---|
+| `0` | 成功（守护正常退出、单次运行完成、手动总结完成） | 正常关闭 |
+| `1` | 其他未捕获异常 | 显示堆栈 |
+| `2` | 另一实例已持有锁 | 提示"已有实例运行" |
+| `3` | 锁文件不可用（权限、磁盘错误） | 提示检查 `state/` 目录 |
+
+#### 验证与回归
+
+完整测试套件使用标准库 `unittest`，不依赖第三方包：
+
+```bash
+python -m unittest discover -s tests -v     # 功能测试（6 个用例）
+python -m unittest tests.test_single_instance_stress -v   # 压力与稳定性（5 个用例）
+python tests/test_single_instance_stress.py                # 或直接运行
+```
+
+覆盖场景：
+- 同路径互斥、不同路径独立；
+- 元数据损坏不影响 OS 锁仲裁；
+- 真实子进程持锁 + 第二个进程立即失败；
+- 持锁进程被 `kill()` 强杀后自动恢复，无需手动删文件；
+- 30 秒连续获取/释放压测，0 失败（实测 ~1000 次/秒）；
+- 2000 轮 lock/unlock 文件描述符不泄漏。
+
+文件完整性可通过以下命令快速核对（哈希会随更新而变化，仅作参照）：
+
+```bash
+python -m py_compile single_instance.py mail_lobster_imap.py tests/test_single_instance.py
+```
+
+#### 故障排查
+
+| 现象 | 排查步骤 |
+|---|---|
+| 启动时立刻提示"已有实例运行"但任务管理器无相关 Python | 检查 `state/mail_lobster.lock` 是否为上次崩溃残留。运行 `python mail_lobster_imap.py --once --test-feishu`（无锁）验证配置；锁由 OS 持有，正常退出后会自动释放，不要手工删除 `state/mail_lobster.lock`。 |
+| `state/` 目录权限错 | 锁模块以追加方式打开文件，需要当前用户对 `state/` 有读写权限。退出码 3。 |
+| 飞书测试和 `--report-error` 被锁挡住 | 不应被挡住——这两条命令旁路锁。检查命令行是否被批处理脚本额外加了参数。 |
+| 同一目录复制成两份并同时启动 | 锁路径随脚本解析到当前目录，不同目录互不冲突；不要把多份程序同时连接到同一汇总邮箱。 |
+
 ---
 
 ## 常见问题
