@@ -37,6 +37,13 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill, Font, Alignment
 
 from ai_analyzer import AIAnalyzer
+from single_instance import (
+    AlreadyRunningError,
+    LockUnavailableError,
+    SingleInstanceLock,
+    lock_path_for_script,
+    requires_instance_lock,
+)
 
 # ===== 配置日志 =====
 # 日志轮转：单个文件最大 5MB，保留 3 个备份（共 ~15MB）
@@ -2448,8 +2455,15 @@ class MailLobsterIMAP:
 
 def main():
     args = sys.argv[1:]
+    lock = None
 
     try:
+        if requires_instance_lock(args):
+            mode = 'daemon' if '--once' not in args and '--summary' not in args else 'run'
+            lock = SingleInstanceLock(lock_path_for_script(__file__), mode)
+            lock.acquire()
+            logger.info(f"🔒 已取得单实例锁 (PID {os.getpid()}, 模式: {mode})")
+
         lobster = MailLobsterIMAP()
 
         if '--test-feishu' in args:
@@ -2530,10 +2544,20 @@ def main():
             else:
                 lobster.run_once()
 
+    except AlreadyRunningError as e:
+        owner = e.metadata.get('pid') if e.metadata else None
+        detail = f"（PID {owner}）" if owner else ""
+        logger.error(f"⛔ 已有实例正在运行{detail}，本次启动已取消")
+    except LockUnavailableError as e:
+        logger.error(f"❌ 单实例锁不可用: {e}")
     except KeyboardInterrupt:
         logger.info("\n⚠️ 用户中断")
     except Exception as e:
         logger.error(f"❌ 程序出错: {e}", exc_info=True)
+    finally:
+        if lock is not None:
+            lock.release()
+            logger.info("🔓 单实例锁已释放")
 
 
 if __name__ == '__main__':
