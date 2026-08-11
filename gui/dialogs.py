@@ -31,13 +31,16 @@ from PySide6.QtWidgets import (
 import mailbox_admin
 
 
-def _styled_label(text: str, *, bold: bool = False, size: int = 12, color: str = "#0f172a") -> QLabel:
+def _styled_label(text: str, *, title: bool = False, subtitle: bool = False) -> QLabel:
     label = QLabel(text)
+    if title:
+        label.setObjectName("DialogTitle")
+    elif subtitle:
+        label.setObjectName("DialogSubtitle")
     font = QFont()
-    font.setPointSize(size)
-    font.setBold(bold)
+    font.setPointSize(14 if title else 11)
+    font.setBold(title)
     label.setFont(font)
-    label.setStyleSheet(f"color: {color};")
     return label
 
 
@@ -51,36 +54,36 @@ class StartupAddMailboxPrompt(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Mail Lobster — 新增监督邮箱？")
         self.setModal(True)
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(440)
         self.choice = self.PROCEED
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 20)
-        layout.setSpacing(16)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(14)
 
-        title = _styled_label("是否新增监督邮箱？", bold=True, size=16)
+        title = _styled_label("是否新增监督邮箱？", title=True)
         layout.addWidget(title)
 
         subtitle = _styled_label(
             "每次启动都会询问，避免新增的邮箱被遗漏。也可以现在跳过，进入监控面板后随时新增。",
-            color="#475569",
-            size=11,
+            subtitle=True,
         )
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
 
         add_btn = QPushButton("➕  新增监督邮箱")
-        add_btn.setMinimumHeight(44)
+        add_btn.setObjectName("PrimaryAction")
+        add_btn.setMinimumHeight(48)
         add_btn.clicked.connect(self._choose_add)
         layout.addWidget(add_btn)
 
         skip_btn = QPushButton("跳过，直接进入监控面板")
-        skip_btn.setMinimumHeight(44)
+        skip_btn.setMinimumHeight(48)
         skip_btn.clicked.connect(self._choose_proceed)
         layout.addWidget(skip_btn)
 
         view_btn = QPushButton("查看现有监督邮箱")
-        view_btn.setMinimumHeight(32)
+        view_btn.setMinimumHeight(34)
         view_btn.clicked.connect(self._view_existing)
         layout.addWidget(view_btn)
 
@@ -136,7 +139,7 @@ class MailboxFormDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
 
-        layout.addWidget(_styled_label("新增监督邮箱", bold=True, size=14))
+        layout.addWidget(_styled_label("新增监督邮箱", title=True))
 
         form = QFormLayout()
         form.setSpacing(8)
@@ -223,6 +226,7 @@ class FirstRunWizard(QWizard):
             "汇总邮箱", "填写 IMAP 信息用于连接汇总邮箱。"
         )
         form = QFormLayout()
+        form.setSpacing(10)
         self._imap_host = QComboBox()
         self._imap_host.setEditable(True)
         self._imap_host.addItems(["imap.qq.com", "imap.139.com", "imap.163.com", "imap.gmail.com"])
@@ -232,9 +236,11 @@ class FirstRunWizard(QWizard):
         self._imap_port.setValue(993)
         form.addRow("端口", self._imap_port)
         self._imap_email = QLineEdit()
+        self._imap_email.setMinimumWidth(280)
         form.addRow("邮箱账号 *", self._imap_email)
         self._imap_password = QLineEdit()
         self._imap_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self._imap_password.setMinimumWidth(280)
         form.addRow("授权码 *", self._imap_password)
         layout.addLayout(form)
         return page
@@ -244,9 +250,12 @@ class FirstRunWizard(QWizard):
             "监督邮箱", "添加需要被监控的业务邮箱。可在面板里继续新增。"
         )
         form = QFormLayout()
+        form.setSpacing(10)
         self._mb_source = QLineEdit()
+        self._mb_source.setMinimumWidth(280)
         form.addRow("源邮箱", self._mb_source)
         self._mb_owner = QLineEdit()
+        self._mb_owner.setMinimumWidth(280)
         form.addRow("负责人", self._mb_owner)
         self._mb_channel = QComboBox()
         self._mb_channel.addItems(["user", "group", "both"])
@@ -261,11 +270,13 @@ class FirstRunWizard(QWizard):
         self._ai_enabled = QCheckBox("启用 AI 分析")
         layout.addWidget(self._ai_enabled)
         form = QFormLayout()
+        form.setSpacing(10)
         self._ai_provider = QComboBox()
         self._ai_provider.addItems(["deepseek", "dashscope", "moonshot"])
         form.addRow("服务", self._ai_provider)
         self._ai_key = QLineEdit()
         self._ai_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self._ai_key.setMinimumWidth(280)
         form.addRow("API Key", self._ai_key)
         layout.addLayout(form)
         return page
@@ -274,10 +285,12 @@ class FirstRunWizard(QWizard):
         page, layout = _make_wizard_page(
             "飞书通知", "填写飞书群机器人 Webhook，私聊推送可后续在面板里开启。"
         )
-        form = QFormLayout()
         self._feishu_enabled = QCheckBox("启用飞书群机器人")
         layout.addWidget(self._feishu_enabled)
+        form = QFormLayout()
+        form.setSpacing(10)
         self._feishu_webhook = QLineEdit()
+        self._feishu_webhook.setMinimumWidth(320)
         form.addRow("Webhook URL", self._feishu_webhook)
         layout.addLayout(form)
         return page

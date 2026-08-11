@@ -42,22 +42,32 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gui.theme import PALETTE_DARK
 
-COLOR_OK = QColor("#16a34a")
-COLOR_WARN = QColor("#d97706")
-COLOR_ERROR = QColor("#dc2626")
-COLOR_INFO = QColor("#0ea5e9")
-COLOR_NEUTRAL = QColor("#64748b")
+
+COLOR_OK = QColor(PALETTE_DARK["success"])
+COLOR_WARN = QColor(PALETTE_DARK["warn"])
+COLOR_ERROR = QColor(PALETTE_DARK["danger"])
+COLOR_INFO = QColor(PALETTE_DARK["accent"])
+COLOR_NEUTRAL = QColor(PALETTE_DARK["text_subtle"])
+
+
+_LEVEL_TO_QSS = {
+    "ok": "ok",
+    "warn": "warn",
+    "error": "error",
+    "info": "info",
+    "neutral": "neutral",
+}
 
 
 def level_color(level: str) -> QColor:
-    mapping = {
+    return {
         "ok": COLOR_OK,
         "warn": COLOR_WARN,
         "error": COLOR_ERROR,
         "info": COLOR_INFO,
-    }
-    return mapping.get(level, COLOR_NEUTRAL)
+    }.get(level, COLOR_NEUTRAL)
 
 
 class StatusCard(QFrame):
@@ -65,48 +75,45 @@ class StatusCard(QFrame):
 
     def __init__(self, title: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setObjectName("StatusCard")
+        self.setProperty("level", "info")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setMinimumHeight(96)
-        self._default_style()
+        self.setMinimumHeight(104)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(6)
 
         self._title_label = QLabel(title)
-        self._title_label.setStyleSheet("color: #94a3b8; font-size: 12px;")
+        self._title_label.setObjectName("StatusCardTitle")
         layout.addWidget(self._title_label)
 
         self._value_label = QLabel("--")
+        self._value_label.setObjectName("StatusCardValue")
+        self._value_label.setProperty("level", "neutral")
         font = QFont()
-        font.setPointSize(20)
+        font.setPointSize(22)
         font.setBold(True)
         self._value_label.setFont(font)
-        self._value_label.setStyleSheet("color: #0f172a;")
         layout.addWidget(self._value_label)
 
         self._hint_label = QLabel("")
-        self._hint_label.setStyleSheet("color: #475569; font-size: 11px;")
+        self._hint_label.setObjectName("StatusCardHint")
         layout.addWidget(self._hint_label)
-
-    def _default_style(self) -> None:
-        self.setStyleSheet(
-            "StatusCard { background: white; border-radius: 10px;"
-            " border: 1px solid #e2e8f0; }"
-        )
 
     @Slot(str, str, str)
     def update_value(self, value: str, level: str = "ok", hint: str = "") -> None:
         self._value_label.setText(value)
-        color = level_color(level)
-        self._value_label.setStyleSheet(f"color: {color.name()};")
+        qss_level = _LEVEL_TO_QSS.get(level, "neutral")
+        self._value_label.setProperty("level", qss_level)
+        self._value_label.style().unpolish(self._value_label)
+        self._value_label.style().polish(self._value_label)
+
+        self.setProperty("level", qss_level if qss_level != "neutral" else "info")
+        self.style().unpolish(self)
+        self.style().polish(self)
+
         self._hint_label.setText(hint)
-        border = color.name()
-        self.setStyleSheet(
-            f"StatusCard {{ background: white; border-radius: 10px;"
-            f" border: 1px solid {border}; }}"
-        )
 
 
 class LogHighlighter(QSyntaxHighlighter):
@@ -129,7 +136,7 @@ class LogHighlighter(QSyntaxHighlighter):
             ("📬", COLOR_INFO),
         ]
 
-    def highlightBlock(self, text: str) -> None:  # noqa: D401 - Qt override
+    def highlightBlock(self, text: str) -> None:  # noqa: D401
         for marker, color in self._rules:
             idx = text.find(marker)
             while idx >= 0:
@@ -142,10 +149,11 @@ class LogHighlighter(QSyntaxHighlighter):
 class LogViewer(QPlainTextEdit):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self.setObjectName("LogViewer")
         self.setReadOnly(True)
-        font = QFont("Consolas, Menlo, Courier New")
+        font = QFont("Cascadia Mono")
         font.setStyleHint(QFont.StyleHint.Monospace)
-        font.setPointSize(10)
+        font.setPointSize(11)
         self.setFont(font)
         self.setMaximumBlockCount(2000)
         self._highlighter = LogHighlighter(self.document())
@@ -182,7 +190,7 @@ class LogTailer(QThread):
                 return candidate
         return None
 
-    def run(self) -> None:  # noqa: D401 - QThread override
+    def run(self) -> None:  # noqa: D401
         active = self._active_file()
         if active is None:
             self.new_lines.emit(["⚠️ 日志文件尚未生成，等待守护进程启动..."])
@@ -212,6 +220,7 @@ class MailboxesTable(QTableWidget):
         self.setHorizontalHeaderLabels(["源邮箱", "负责人", "渠道", "前缀"])
         self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.verticalHeader().setVisible(False)
+        self.setAlternatingRowColors(True)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
 
@@ -230,6 +239,7 @@ class ReportsTable(QTableWidget):
         self.setHorizontalHeaderLabels(["文件名", "类型", "修改时间", "大小"])
         self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.verticalHeader().setVisible(False)
+        self.setAlternatingRowColors(True)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.doubleClicked.connect(self._open_file)
 
@@ -245,7 +255,9 @@ class ReportsTable(QTableWidget):
             name_item.setData(Qt.ItemDataRole.UserRole, str(path))
             self.setItem(row, 0, name_item)
             self.setItem(row, 1, QTableWidgetItem(kind))
-            self.setItem(row, 2, QTableWidgetItem(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime))))
+            self.setItem(
+                row, 2, QTableWidgetItem(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime)))
+            )
             self.setItem(row, 3, QTableWidgetItem(_human_size(size)))
 
 
@@ -267,19 +279,16 @@ class DaemonControls(QFrame):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self.setObjectName("DaemonControls")
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setStyleSheet(
-            "DaemonControls { background: white; border-radius: 10px;"
-            " border: 1px solid #e2e8f0; }"
-        )
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(8)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(16, 12, 16, 12)
+        outer_layout.setSpacing(8)
 
         title = QLabel("守护进程控制")
-        title.setStyleSheet("color: #0f172a; font-weight: bold; font-size: 13px;")
-        layout.addWidget(title)
+        title.setObjectName("StatusCardTitle")
+        outer_layout.addWidget(title)
 
         buttons = QGridLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
@@ -289,6 +298,9 @@ class DaemonControls(QFrame):
         self._stop_btn = QPushButton("⏹ 停止")
         self._restart_btn = QPushButton("🔄 重启")
         self._add_mailbox_btn = QPushButton("➕ 新增监督邮箱")
+
+        self._start_btn.setObjectName("PrimaryAction")
+        self._add_mailbox_btn.setObjectName("PrimaryAction")
 
         self._start_btn.clicked.connect(self.start_clicked)
         self._stop_btn.clicked.connect(self.stop_clicked)
@@ -307,7 +319,7 @@ class DaemonControls(QFrame):
         buttons.addWidget(self._stop_btn, 0, 1)
         buttons.addWidget(self._restart_btn, 1, 0)
         buttons.addWidget(self._add_mailbox_btn, 1, 1)
-        layout.addLayout(buttons)
+        outer_layout.addLayout(buttons)
 
     def set_running(self, running: bool) -> None:
         self._start_btn.setEnabled(not running)

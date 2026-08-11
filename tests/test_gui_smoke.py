@@ -43,6 +43,20 @@ class PureHelpersTests(unittest.TestCase):
         self.assertEqual(_heartbeat_hint(150), "心跳偏慢，请关注")
         self.assertEqual(_heartbeat_hint(600), "心跳异常，守护可能卡死")
 
+    def test_theme_qss_distinct(self):
+        from gui.theme import theme_qss
+
+        light = theme_qss("light")
+        dark = theme_qss("dark")
+        self.assertIn("#f1f5f9", light)  # light bg token
+        self.assertIn("#0b1220", dark)   # dark bg token
+        self.assertNotEqual(light, dark)
+
+    def test_supported_themes_constant(self):
+        from gui.app import SUPPORTED_THEMES, DEFAULT_THEME
+
+        self.assertIn(DEFAULT_THEME, SUPPORTED_THEMES)
+
 
 @unittest.skipUnless(
     os.environ.get("QT_QPA_PLATFORM") in {"offscreen", "minimal", None},

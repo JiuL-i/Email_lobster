@@ -176,6 +176,12 @@ def run() -> int:
     if ICON_PATH.exists():
         app.setWindowIcon(QIcon(str(ICON_PATH)))
 
+    # Apply dark theme by default before any window is constructed.
+    from gui.theme import theme_qss, default_font
+
+    app.setFont(default_font())
+    app.setStyleSheet(theme_qss("dark"))
+
     controller = Controller()
     try:
         controller.acquire_launcher_lock()

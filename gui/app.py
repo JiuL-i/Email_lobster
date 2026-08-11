@@ -11,12 +11,13 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import (
     QObject,
+    QSize,
     QTimer,
     Qt,
     Signal,
     Slot,
 )
-from PySide6.QtGui import QAction, QCloseEvent, QIcon
+from PySide6.QtGui import QAction, QCloseEvent, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QGridLayout,
@@ -24,15 +25,18 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QSizePolicy,
     QSplitter,
     QStatusBar,
     QTabWidget,
+    QToolBar,
     QVBoxLayout,
     QWidget,
 )
 
 import mailbox_admin
+from gui.theme import theme_qss
 from gui.widgets import (
     COLOR_OK,
     DaemonControls,
@@ -44,6 +48,10 @@ from gui.widgets import (
     _human_size,
     level_color,
 )
+
+
+SUPPORTED_THEMES = ("dark", "light")
+DEFAULT_THEME = "dark"
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -60,7 +68,7 @@ class DashboardSignals(QObject):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, controller, parent: Optional[QWidget] = None, start_log_tailer: bool = True) -> None:
+    def __init__(self, controller, parent: Optional[QWidget] = None, start_log_tailer: bool = True, theme: str = DEFAULT_THEME) -> None:
         super().__init__(parent)
         self.controller = controller
         self.setWindowTitle("🦞 Mail Lobster 监控面板")
@@ -68,11 +76,13 @@ class MainWindow(QMainWindow):
 
         self._started_at = datetime.now()
         self._signals = DashboardSignals()
+        self._theme = theme if theme in SUPPORTED_THEMES else DEFAULT_THEME
 
         self._build_layout()
         self._wire_signals()
         self._start_timers()
         self._refresh_status()
+        self.apply_theme(self._theme)
 
         self._log_tailer: Optional[LogTailer] = None
         if start_log_tailer:
@@ -83,7 +93,6 @@ class MainWindow(QMainWindow):
     # ---------------- layout ----------------
     def _build_layout(self) -> None:
         central = QWidget(self)
-        central.setStyleSheet("background: #f1f5f9;")
         outer = QVBoxLayout(central)
         outer.setContentsMargins(16, 16, 16, 16)
         outer.setSpacing(12)
@@ -100,6 +109,18 @@ class MainWindow(QMainWindow):
         ):
             grid.addWidget(card, 0, col)
         outer.addLayout(grid)
+
+        # Theme toggle bar
+        theme_row = QHBoxLayout()
+        theme_row.setContentsMargins(0, 0, 0, 0)
+        theme_row.addStretch(1)
+        self._theme_button = QPushButton()
+        self._theme_button.setObjectName("ThemeToggle")
+        self._theme_button.setMinimumWidth(140)
+        self._theme_button.setMinimumHeight(32)
+        self._theme_button.clicked.connect(self._toggle_theme)
+        theme_row.addWidget(self._theme_button)
+        outer.addLayout(theme_row)
 
         # Tabs: log, mailboxes, reports
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -249,6 +270,29 @@ class MainWindow(QMainWindow):
         dialog = MailboxFormDialog(self)
         dialog.exec()
         self._refresh_mailboxes()
+
+    # ---------------- theme ----------------
+    def apply_theme(self, theme: str) -> None:
+        """Apply the given theme to the main window and re-style all child widgets."""
+        self._theme = theme if theme in SUPPORTED_THEMES else DEFAULT_THEME
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(theme_qss(self._theme))
+        if self._theme_button is not None:
+            self._theme_button.setText("🌞 切换浅色" if self._theme == "dark" else "🌙 切换深色")
+        # Force a polish cycle so dynamic properties (level=...) pick up the new palette.
+        for widget in self.findChildren(QWidget):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+        # Status cards need an extra refresh because their level colours depend on the new palette.
+        self._status_card.update_value(self._status_card._value_label.text(), "info")
+        self._runtime_card.update_value(self._runtime_card._value_label.text(), "info")
+        self._heartbeat_card.update_value(self._heartbeat_card._value_label.text(), "info")
+        self._started_card.update_value(self._started_card._value_label.text(), "info")
+
+    @Slot()
+    def _toggle_theme(self) -> None:
+        self.apply_theme("light" if self._theme == "dark" else "dark")
 
     # ---------------- shutdown ----------------
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: D401
