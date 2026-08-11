@@ -116,14 +116,9 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self._daemon_controls)
 
         self._mailboxes_table = MailboxesTable()
-        right_layout.addWidget(self._mailboxes_table, 1)
-
         self._reports_table = ReportsTable()
+        right_tabs.addTab(self._mailboxes_table, "📬 监督邮箱")
         right_tabs.addTab(self._reports_table, "📑 报表")
-        right_tabs.addTab(self._mailboxes_table.parent(), "📬 监督邮箱")
-
-        # Rebuild right panel layout: top daemon controls + tabs underneath
-        right_layout.removeWidget(self._mailboxes_table)
         right_layout.addWidget(right_tabs, 1)
 
         splitter.addWidget(self._log_viewer)
