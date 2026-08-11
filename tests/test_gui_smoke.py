@@ -38,10 +38,10 @@ class PureHelpersTests(unittest.TestCase):
     def test_heartbeat_hint_thresholds(self):
         from gui.app import _heartbeat_hint
 
-        self.assertIn("新鲜", _heartbeat_hint(10))
-        self.assertIn("略慢", _heartbeat_hint(60))
-        self.assertIn("偏慢", _heartbeat_hint(150))
-        self.assertIn("异常", _heartbeat_hint(600))
+        self.assertIn("新鲜", _heartbeat_hint(1))
+        self.assertIn("略慢", _heartbeat_hint(5))
+        self.assertIn("偏慢", _heartbeat_hint(15))
+        self.assertIn("异常", _heartbeat_hint(60))
 
     def test_theme_qss_distinct(self):
         from gui.theme import theme_qss
@@ -56,6 +56,33 @@ class PureHelpersTests(unittest.TestCase):
         from gui.app import SUPPORTED_THEMES, DEFAULT_THEME
 
         self.assertIn(DEFAULT_THEME, SUPPORTED_THEMES)
+
+    def test_heartbeat_source_prefers_launcher(self):
+        import json
+        from pathlib import Path
+        from gui.app import _heartbeat_source
+
+        # Both files: launcher wins.
+        launcher = Path("state/launcher.heartbeat")
+        launcher.parent.mkdir(parents=True, exist_ok=True)
+        launcher.write_text(json.dumps({"launcher_pid": 1}), encoding="utf-8")
+        try:
+            self.assertEqual(_heartbeat_source(), "launcher")
+        finally:
+            launcher.unlink()
+
+        # No launcher file but daemon file exists.
+        Path("state/heartbeat").write_text("{}")
+        try:
+            self.assertEqual(_heartbeat_source(), "daemon")
+        finally:
+            try:
+                Path("state/heartbeat").unlink()
+            except OSError:
+                pass
+
+        # Neither.
+        self.assertEqual(_heartbeat_source(), "none")
 
 
 @unittest.skipUnless(

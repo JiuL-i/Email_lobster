@@ -17,10 +17,11 @@ import signal
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QObject, QTimer, Qt
+from PySide6.QtCore import QObject, QTimer, Qt, Slot
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -35,6 +36,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 DAEMON_LOCK_PATH = PROJECT_ROOT / "state" / "mail_lobster.lock"
 LAUNCHER_LOCK_PATH = PROJECT_ROOT / "state" / "mail_lobster.launcher.lock"
 LAUNCHER_STATE = PROJECT_ROOT / "state" / "launcher.state.json"
+LAUNCHER_HEARTBEAT = PROJECT_ROOT / "state" / "launcher.heartbeat"
 ICON_PATH = PROJECT_ROOT / "assets" / "lobster.ico"
 
 
@@ -46,6 +48,7 @@ class Controller(QObject):
         self._process: Optional[subprocess.Popen] = None
         self._lock: Optional[SingleInstanceLock] = None
         self._last_error: Optional[str] = None
+        self._heartbeat_timer: Optional[QTimer] = None
 
     def acquire_launcher_lock(self) -> None:
         LAUNCHER_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -184,8 +187,50 @@ class Controller(QObject):
         self._clear_state()
 
     def shutdown(self) -> None:
+        self._stop_heartbeat()
         self.stop_daemon()
         self.release_launcher_lock()
+
+    # ---- launcher heartbeat (independent of daemon config) ----
+    def start_heartbeat(self) -> None:
+        """Write a small JSON heartbeat every second as long as the launcher is up.
+
+        This file (`state/launcher.heartbeat`) is owned by the GUI launcher
+        and is updated regardless of whether the daemon has its own
+        heartbeat.enabled configured. The dashboard reads this file first,
+        so the panel always shows a live signal even when the daemon is
+        not configured to write one. The daemon-side `state/heartbeat`
+        remains for OpenClaw watchdogs.
+        """
+        if self._heartbeat_timer is not None:
+            return
+        self._heartbeat_timer = QTimer()
+        self._heartbeat_timer.setInterval(1000)
+        self._heartbeat_timer.timeout.connect(self._write_launcher_heartbeat)
+        self._heartbeat_timer.start()
+        self._write_launcher_heartbeat()  # immediate first write
+
+    def _stop_heartbeat(self) -> None:
+        if self._heartbeat_timer is not None:
+            self._heartbeat_timer.stop()
+            self._heartbeat_timer = None
+
+    @Slot()
+    def _write_launcher_heartbeat(self) -> None:
+        try:
+            LAUNCHER_HEARTBEAT.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "launcher_pid": os.getpid(),
+                "daemon_pid": self._process.pid if self._process and self._process.poll() is None else None,
+                "daemon_alive": self.daemon_running(),
+            }
+            tmp = LAUNCHER_HEARTBEAT.with_suffix(".heartbeat.tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, LAUNCHER_HEARTBEAT)
+        except OSError:
+            # Heartbeat failures must never crash the launcher.
+            pass
 
     def _write_state(self) -> None:
         LAUNCHER_STATE.parent.mkdir(parents=True, exist_ok=True)
@@ -251,6 +296,7 @@ def run() -> int:
     except RuntimeError as exc:
         QMessageBox.critical(None, "启动器已在运行", str(exc))
         return 2
+    controller.start_heartbeat()
 
     config_path = PROJECT_ROOT / "config_imap_forward.json"
 

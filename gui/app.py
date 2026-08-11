@@ -57,6 +57,7 @@ DEFAULT_THEME = "dark"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOG_PATH = PROJECT_ROOT / "mail_lobster_imap.log"
 HEARTBEAT_PATH = PROJECT_ROOT / "state" / "heartbeat"
+LAUNCHER_HEARTBEAT_PATH = PROJECT_ROOT / "state" / "launcher.heartbeat"
 LAUNCHER_LOCK_PATH = PROJECT_ROOT / "state" / "mail_lobster.launcher.lock"
 DAEMON_LOCK_PATH = PROJECT_ROOT / "state" / "mail_lobster.lock"
 LAUNCHER_STATE = PROJECT_ROOT / "state" / "launcher.state.json"
@@ -185,15 +186,14 @@ class MainWindow(QMainWindow):
 
         hb_age = _heartbeat_age_seconds()
         if hb_age is None:
-            if not HEARTBEAT_PATH.exists():
-                hint = "守护尚未运行，或未在 config 中启用 heartbeat.enabled"
-            else:
-                hint = "心跳文件存在但读取失败"
-            self._heartbeat_card.update_value("无心跳", "warn", hint)
+            self._heartbeat_card.update_value("无心跳", "warn", "启动器尚未运行")
         else:
-            level = "ok" if hb_age < 120 else ("warn" if hb_age < 300 else "error")
+            level = "ok" if hb_age < 3 else ("warn" if hb_age < 10 else "error")
             self._heartbeat_card.update_value(_format_duration(hb_age), level, _heartbeat_hint(hb_age))
-        self._last_heartbeat_label.setText(f"⏰ 上次心跳: {_last_heartbeat_text()}")
+        source = _heartbeat_source()
+        self._last_heartbeat_label.setText(
+            f"⏰ 上次心跳: {_last_heartbeat_text()}  [{source}]"
+        )
 
     @Slot()
     def _tick_slow(self) -> None:
@@ -328,24 +328,41 @@ def _format_duration(seconds: int) -> str:
 
 
 def _heartbeat_age_seconds() -> Optional[int]:
-    if not HEARTBEAT_PATH.exists():
-        return None
-    age = time.time() - HEARTBEAT_PATH.stat().st_mtime
-    return int(age)
+    """Returns seconds since the most recent launcher-side heartbeat.
+
+    Prefers the launcher's own `state/launcher.heartbeat` (always present
+    while the GUI is running). Falls back to the daemon's
+    `state/heartbeat` if the launcher file does not exist (e.g. headless
+    daemon run from a .bat).
+    """
+    for candidate in (LAUNCHER_HEARTBEAT_PATH, HEARTBEAT_PATH):
+        if candidate.exists():
+            return int(time.time() - candidate.stat().st_mtime)
+    return None
 
 
 def _last_heartbeat_text() -> str:
-    if not HEARTBEAT_PATH.exists():
-        return "(无)"
-    mtime = HEARTBEAT_PATH.stat().st_mtime
-    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime))
+    for candidate in (LAUNCHER_HEARTBEAT_PATH, HEARTBEAT_PATH):
+        if candidate.exists():
+            mtime = candidate.stat().st_mtime
+            return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime))
+    return "(无)"
+
+
+def _heartbeat_source() -> str:
+    """Return a short tag describing which heartbeat file is being read."""
+    if LAUNCHER_HEARTBEAT_PATH.exists():
+        return "launcher"
+    if HEARTBEAT_PATH.exists():
+        return "daemon"
+    return "none"
 
 
 def _heartbeat_hint(age: int) -> str:
-    if age < 60:
+    if age < 3:
         return "心跳新鲜"
-    if age < 120:
-        return "略慢（检查间隔 5 分钟时正常）"
-    if age < 300:
-        return "心跳偏慢，查看日志/检查 IMAP"
-    return "心跳异常：守护可能未运行或卡死"
+    if age < 10:
+        return "略慢"
+    if age < 30:
+        return "心跳偏慢，查看日志"
+    return "心跳异常：启动器可能未运行"
