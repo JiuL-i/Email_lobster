@@ -185,7 +185,11 @@ class MainWindow(QMainWindow):
 
         hb_age = _heartbeat_age_seconds()
         if hb_age is None:
-            self._heartbeat_card.update_value("无心跳", "warn", "等待守护进程写入 state/heartbeat")
+            if not HEARTBEAT_PATH.exists():
+                hint = "守护尚未运行，或未在 config 中启用 heartbeat.enabled"
+            else:
+                hint = "心跳文件存在但读取失败"
+            self._heartbeat_card.update_value("无心跳", "warn", hint)
         else:
             level = "ok" if hb_age < 120 else ("warn" if hb_age < 300 else "error")
             self._heartbeat_card.update_value(_format_duration(hb_age), level, _heartbeat_hint(hb_age))
@@ -203,12 +207,19 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _refresh_status(self) -> None:
-        pid = self.controller.daemon_pid()
         running = self.controller.daemon_running()
+        ext_pid = self.controller.external_daemon_alive()
+        pid = self.controller.daemon_pid()
         if running:
             self._status_card.update_value("运行中", "ok", f"守护 PID {pid}")
+        elif ext_pid is not None:
+            self._status_card.update_value(
+                "外部运行", "info", f"检测到外部守护 PID {ext_pid}（非本启动器启动）"
+            )
         else:
-            self._status_card.update_value("未运行", "warn", "守护进程尚未启动或已停止")
+            err = self.controller.last_error()
+            hint = err or "守护进程尚未启动或已停止"
+            self._status_card.update_value("未运行", "warn", hint)
         self._daemon_controls.set_running(running)
         self._lock_label.setText(
             "🔒 单实例锁: 已持有" if self.controller.launcher_lock_held() else "🔓 单实例锁: 已释放"
@@ -245,13 +256,16 @@ class MainWindow(QMainWindow):
     def _on_start(self) -> None:
         try:
             self.controller.start_daemon()
-        except Exception as exc:  # noqa: BLE001 - surface to UI
+        except RuntimeError as exc:
             QMessageBox.warning(self, "启动失败", str(exc))
         self._refresh_status()
 
     @Slot()
     def _on_stop(self) -> None:
         self.controller.stop_daemon()
+        err = self.controller.last_error()
+        if err:
+            QMessageBox.information(self, "停止", err)
         self._refresh_status()
 
     @Slot()
@@ -259,7 +273,7 @@ class MainWindow(QMainWindow):
         self.controller.stop_daemon()
         try:
             self.controller.start_daemon()
-        except Exception as exc:  # noqa: BLE001
+        except RuntimeError as exc:
             QMessageBox.warning(self, "重启失败", str(exc))
         self._refresh_status()
 
@@ -331,7 +345,7 @@ def _heartbeat_hint(age: int) -> str:
     if age < 60:
         return "心跳新鲜"
     if age < 120:
-        return "略慢"
+        return "略慢（检查间隔 5 分钟时正常）"
     if age < 300:
-        return "心跳偏慢，请关注"
-    return "心跳异常，守护可能卡死"
+        return "心跳偏慢，查看日志/检查 IMAP"
+    return "心跳异常：守护可能未运行或卡死"

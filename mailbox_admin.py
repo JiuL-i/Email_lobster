@@ -20,6 +20,10 @@ from typing import Any, Dict, List, Optional
 CONFIG_FILE = "config_imap_forward.json"
 PLACEHOLDER_MARKERS = ("你的QQ邮箱", "your_email", "your@email", "你的邮箱")
 
+# Valid notify_channel values — must match the daemon's _get_owner_channel switch.
+VALID_NOTIFY_CHANNELS = ("group", "private", "both")
+DEFAULT_NOTIFY_CHANNEL = "private"
+
 
 def config_path(base: Optional[os.PathLike[str] | str] = None) -> Path:
     if base is None:
@@ -81,9 +85,15 @@ def add_mailbox(config: Dict[str, Any], entry: Dict[str, Any]) -> List[Dict[str,
         raise ValueError("source_email and owner are required")
     if any(m.get("source_email", "").lower() == source.lower() for m in mailboxes):
         raise ValueError(f"mailbox {source} already exists")
-    notify_channel = (entry.get("notify_channel") or mapping.get("default_channel") or "private").strip()
-    if notify_channel not in {"group", "private", "both"}:
-        raise ValueError(f"invalid notify_channel: {notify_channel}")
+    raw_channel = entry.get("notify_channel")
+    if raw_channel is None or (isinstance(raw_channel, str) and raw_channel.strip() == ""):
+        notify_channel = mapping.get("default_channel") or DEFAULT_NOTIFY_CHANNEL
+    else:
+        notify_channel = raw_channel.strip()
+        if notify_channel not in VALID_NOTIFY_CHANNELS:
+            raise ValueError(
+                f"invalid notify_channel {notify_channel!r}; allowed values: {VALID_NOTIFY_CHANNELS}"
+            )
     new_entry = {"source_email": source, "owner": owner, "notify_channel": notify_channel}
     prefix = (entry.get("prefix") or "").strip()
     if prefix:

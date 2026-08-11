@@ -63,11 +63,30 @@ class MailboxAdminTests(unittest.TestCase):
 
     def test_add_invalid_channel_rejected(self):
         config = {"mailbox_mapping": {"mailboxes": []}}
-        with self.assertRaises(ValueError):
-            add_mailbox(
-                config,
-                {"source_email": "a@x.com", "owner": "X", "notify_channel": "bogus"},
-            )
+        # Empty string falls through to default (intentional for the GUI form),
+        # so we explicitly verify rejection for every other invalid value.
+        for bogus in ("user", "dm", "BOTH", "Both", "PRIVATE", "Group"):
+            with self.assertRaises(ValueError):
+                add_mailbox(
+                    config,
+                    {"source_email": "a@x.com", "owner": "X", "notify_channel": bogus},
+                )
+
+    def test_add_channel_case_insensitive_accepts_lowercase(self):
+        config = {"mailbox_mapping": {"mailboxes": []}}
+        mailboxes = add_mailbox(
+            config,
+            {"source_email": "a@x.com", "owner": "X", "notify_channel": "group"},
+        )
+        self.assertEqual(mailboxes[0]["notify_channel"], "group")
+
+    def test_add_empty_channel_falls_through_to_default(self):
+        config = {"mailbox_mapping": {"mailboxes": [], "default_channel": "group"}}
+        mailboxes = add_mailbox(
+            config,
+            {"source_email": "a@x.com", "owner": "X", "notify_channel": ""},
+        )
+        self.assertEqual(mailboxes[0]["notify_channel"], "group")
 
     def test_add_default_channel(self):
         config = {

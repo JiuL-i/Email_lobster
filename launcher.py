@@ -45,6 +45,7 @@ class Controller(QObject):
         super().__init__()
         self._process: Optional[subprocess.Popen] = None
         self._lock: Optional[SingleInstanceLock] = None
+        self._last_error: Optional[str] = None
 
     def acquire_launcher_lock(self) -> None:
         LAUNCHER_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -68,33 +69,98 @@ class Controller(QObject):
 
     # ---- daemon supervision ----
     def daemon_running(self) -> bool:
+        """True iff the controller has a live handle to the daemon.
+
+        We deliberately do NOT trust state-file PIDs (they go stale), so the
+        dashboard only ever claims "running" when we ourselves spawned it.
+        """
         if self._process is None:
-            return self._read_state_pid()
+            return False
         return self._process.poll() is None
 
+    def external_daemon_alive(self) -> Optional[int]:
+        """Detect a daemon started outside of this launcher.
+
+        Returns its PID if `state/mail_lobster.lock` exists and points at a
+        live process; otherwise None. This lets the status card distinguish
+        "外部启动的守护在跑" from "没有守护".
+        """
+        if not DAEMON_LOCK_PATH.exists():
+            return None
+        try:
+            text = DAEMON_LOCK_PATH.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        # The lock file may contain diagnostic JSON ({"pid": ..., "mode": ...})
+        # or be empty (just used for the OS-level flock). Try to parse JSON
+        # for a PID first; fall back to None if we cannot.
+        try:
+            data = json.loads(text or "{}")
+            pid = int(data.get("pid") or 0)
+        except (ValueError, json.JSONDecodeError):
+            return None
+        if pid <= 0:
+            return None
+        return pid if self._pid_alive(pid) else None
+
+    @staticmethod
+    def _pid_alive(pid: int) -> bool:
+        if sys.platform == "win32":
+            try:
+                out = subprocess.run(
+                    ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+                return f'"{pid}"' in out.stdout
+            except (OSError, subprocess.SubprocessError):
+                return False
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+
     def daemon_pid(self) -> Optional[int]:
-        if self._process is not None:
+        if self._process is not None and self._process.poll() is None:
             return self._process.pid
-        return self._read_state_pid()
+        return self.external_daemon_alive()
+
+    def last_error(self) -> Optional[str]:
+        return self._last_error
 
     def start_daemon(self) -> None:
+        self._last_error = None
         if self.daemon_running():
             return
-        log = open(PROJECT_ROOT / "mail_lobster_imap.log", "ab", buffering=0)
+        try:
+            log_handle = open(PROJECT_ROOT / "mail_lobster_imap.log", "ab", buffering=0)
+        except OSError as exc:
+            self._last_error = f"无法打开日志文件: {exc}"
+            raise RuntimeError(self._last_error) from exc
         creationflags = 0
         if sys.platform == "win32":
             creationflags = subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
-        self._process = subprocess.Popen(
-            [sys.executable, "-X", "utf8", "mail_lobster_imap.py"],
-            cwd=str(PROJECT_ROOT),
-            stdout=log,
-            stderr=log,
-            stdin=subprocess.DEVNULL,
-            creationflags=creationflags,
-        )
+        try:
+            self._process = subprocess.Popen(
+                [sys.executable, "-X", "utf8", "mail_lobster_imap.py"],
+                cwd=str(PROJECT_ROOT),
+                stdout=log_handle,
+                stderr=log_handle,
+                stdin=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
+        except OSError as exc:
+            log_handle.close()
+            self._last_error = f"subprocess.Popen 失败: {exc}"
+            raise RuntimeError(self._last_error) from exc
         self._write_state()
 
     def stop_daemon(self) -> None:
+        self._last_error = None
         if self._process is not None:
             try:
                 self._process.terminate()
@@ -103,26 +169,23 @@ class Controller(QObject):
                 except subprocess.TimeoutExpired:
                     self._process.kill()
                     self._process.wait(timeout=5)
+            except OSError as exc:
+                self._last_error = f"终止守护失败: {exc}"
             finally:
                 self._process = None
-        else:
-            pid = self._read_state_pid()
-            if pid:
-                self._terminate_pid(pid)
+            self._clear_state()
+            return
+        # No handle we own — try the externally started daemon.
+        ext_pid = self.external_daemon_alive()
+        if ext_pid is None:
+            self._last_error = "没有找到 launcher 启动的守护进程，也没有外部守护在运行。"
+            return
+        self._terminate_pid(ext_pid)
         self._clear_state()
 
     def shutdown(self) -> None:
         self.stop_daemon()
         self.release_launcher_lock()
-
-    def _read_state_pid(self) -> Optional[int]:
-        if not LAUNCHER_STATE.exists():
-            return None
-        try:
-            data = json.loads(LAUNCHER_STATE.read_text(encoding="utf-8"))
-            return int(data.get("daemon_pid") or 0) or None
-        except (OSError, ValueError):
-            return None
 
     def _write_state(self) -> None:
         LAUNCHER_STATE.parent.mkdir(parents=True, exist_ok=True)

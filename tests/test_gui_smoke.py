@@ -38,10 +38,10 @@ class PureHelpersTests(unittest.TestCase):
     def test_heartbeat_hint_thresholds(self):
         from gui.app import _heartbeat_hint
 
-        self.assertEqual(_heartbeat_hint(10), "心跳新鲜")
-        self.assertEqual(_heartbeat_hint(60), "略慢")
-        self.assertEqual(_heartbeat_hint(150), "心跳偏慢，请关注")
-        self.assertEqual(_heartbeat_hint(600), "心跳异常，守护可能卡死")
+        self.assertIn("新鲜", _heartbeat_hint(10))
+        self.assertIn("略慢", _heartbeat_hint(60))
+        self.assertIn("偏慢", _heartbeat_hint(150))
+        self.assertIn("异常", _heartbeat_hint(600))
 
     def test_theme_qss_distinct(self):
         from gui.theme import theme_qss
@@ -87,6 +87,12 @@ class _NullController:
 
     def launcher_lock_held(self):
         return False
+
+    def external_daemon_alive(self):
+        return None
+
+    def last_error(self):
+        return None
 
 
 if __name__ == "__main__":

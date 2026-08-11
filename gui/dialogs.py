@@ -30,6 +30,12 @@ from PySide6.QtWidgets import (
 
 import mailbox_admin
 
+CHANNEL_LABELS = {
+    "group": "群聊（group）",
+    "private": "私聊（private）",
+    "both": "群+私（both）",
+}
+
 
 def _styled_label(text: str, *, title: bool = False, subtitle: bool = False) -> QLabel:
     label = QLabel(text)
@@ -153,7 +159,7 @@ class MailboxFormDialog(QDialog):
         form.addRow("负责人 *", self._owner_input)
 
         self._channel_input = QComboBox()
-        self._channel_input.addItems(["user", "group", "both"])
+        self._channel_input.addItems(list(mailbox_admin.VALID_NOTIFY_CHANNELS))
         form.addRow("推送渠道", self._channel_input)
 
         self._prefix_input = QLineEdit()
@@ -258,7 +264,7 @@ class FirstRunWizard(QWizard):
         self._mb_owner.setMinimumWidth(280)
         form.addRow("负责人", self._mb_owner)
         self._mb_channel = QComboBox()
-        self._mb_channel.addItems(["user", "group", "both"])
+        self._mb_channel.addItems(list(mailbox_admin.VALID_NOTIFY_CHANNELS))
         form.addRow("推送渠道", self._mb_channel)
         layout.addLayout(form)
         return page
