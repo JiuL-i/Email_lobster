@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 """显示配置摘要 - 由 first_run.bat 调用"""
 import json

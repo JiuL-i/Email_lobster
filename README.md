@@ -226,7 +226,7 @@ python mail_lobster_imap.py --test-feishu-app # 测试私聊推送
 | `run_daemon.bat` | 优先启动 GUI 启动器；无打包时退回 python 守护 |
 | `run_once.bat` | 单次检查 |
 | `run_summary.bat` | 手动总结 |
-| `测试飞书.bat` | 飞书推送测试 |
+| `first_run.bat` 菜单 4 | 飞书推送测试 |
 | `_display_config.py` | 配置摘要显示 |
 | `_backup_config.py` | 配置备份/恢复 |
 | `setup_wizard.py` | CLI 设置向导（GUI 可自动调用） |
