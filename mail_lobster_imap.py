@@ -44,6 +44,7 @@ from single_instance import (
     lock_path_for_script,
     requires_instance_lock,
 )
+from seen_emails_store import SeenEmailsStore
 
 # ===== 配置日志 =====
 # 日志轮转：单个文件最大 5MB，保留 3 个备份（共 ~15MB）
@@ -69,6 +70,30 @@ class MailLobsterIMAP:
     def __init__(self, config_path: str = CONFIG_FILE):
         self.config = self._load_config(config_path)
         self.ai = AIAnalyzer(self.config.get('ai', {}))
+
+        # Persistent seen-email store (tracks which messages have been
+        # fetched, pushed in summaries, and notified via private channels).
+        # Resolve the state directory in this priority order:
+        #   1. MAIL_LOBSTER_APP_ROOT env var (set by the GUI launcher when
+        #      spawning the daemon subprocess, so the EXE's state dir is
+        #      known regardless of cwd or __file__ weirdness in PyInstaller)
+        #   2. CWD-relative state/ (works when the daemon is started from
+        #      the installation directory)
+        #   3. Path(__file__).parent / state/ (works when running from
+        #      source)
+        try:
+            from pathlib import Path as _Path
+            import os as _os
+            _app_root = _os.environ.get("MAIL_LOBSTER_APP_ROOT")
+            if _app_root:
+                _state_dir = _Path(_app_root) / "state"
+            elif _Path("state").exists():
+                _state_dir = _Path("state").resolve()
+            else:
+                _state_dir = _Path(__file__).resolve().parent / "state"
+            self.seen_store = SeenEmailsStore(_state_dir / "seen_emails.jsonl")
+        except Exception:
+            self.seen_store = None
 
         # 级别 0-6 对应的 Excel 行颜色
         self.level_colors = {
@@ -1348,6 +1373,10 @@ class MailLobsterIMAP:
                         'subject': clean_subject,
                         'preview': body[:100].replace('\n', ' ').strip() if body else '(无预览)',
                         'ai_summary': category.get('ai_summary', ''),
+                        # RFC 822 Message-ID, stripped of angle brackets. Used as
+                        # the durable seen-email key so we don't re-fetch or
+                        # double-push the same message after a restart.
+                        'msg_id': (msg.get('Message-ID', '') or '').strip().strip('<>'),
                         'ai_action': category.get('ai_action', ''),
                         'email_id': eid.decode() if isinstance(eid, bytes) else str(eid),
                     }
@@ -1422,6 +1451,24 @@ class MailLobsterIMAP:
                     if settings.get('mark_as_read', True):
                         try:
                             mail.store(eid, '+FLAGS', '\\Seen')
+                        except Exception:
+                            pass
+
+                    # 记录到 seen_emails_store（防止重启后重复抓取 / 漏汇总）
+                    if self.seen_store is not None:
+                        try:
+                            msg_id = (record.get('msg_id') or record.get('message_id') or '').strip()
+                            if msg_id:
+                                self.seen_store.mark_seen(
+                                    record.get('source_email') or '',
+                                    msg_id,
+                                    subject=record.get('subject', ''),
+                                    owner=record.get('owner', ''),
+                                    level=record.get('level', 6),
+                                    platform=record.get('platform', ''),
+                                    category=record.get('sub_category') or record.get('category', ''),
+                                    notify_owner=record.get('notify_owner', '') or record.get('owner', ''),
+                                )
                         except Exception:
                             pass
 
@@ -2153,6 +2200,19 @@ class MailLobsterIMAP:
         time_range = f"{start_time} ~ {end_time}"
 
         self._dispatch_summary(emails_data, summary_time, time_range)
+
+        # 标记本轮所有已汇总邮件为已推送（按 slot）
+        if self.seen_store is not None:
+            try:
+                for rec in emails_data:
+                    msg_id = (rec.get('msg_id') or '').strip()
+                    src = (rec.get('source_email') or '').strip()
+                    if msg_id and src:
+                        self.seen_store.mark_pushed_in_slot(
+                            src, msg_id, summary_time
+                        )
+            except Exception as e:
+                logger.debug(f"  ⚠️ mark_pushed_in_slot 失败: {e}")
 
         # 重置周期
         self.current_cycle_emails = []

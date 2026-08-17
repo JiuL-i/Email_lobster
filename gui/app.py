@@ -54,7 +54,23 @@ SUPPORTED_THEMES = ("dark", "light")
 DEFAULT_THEME = "dark"
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+def _resolve_app_root() -> Path:
+    """Find the EXE's sibling directory in frozen mode.
+
+    PyInstaller freezes ``__file__`` of every bundled module to a path
+    inside the *temporary* ``_MEIPASS`` extraction dir, so anchoring on
+    ``__file__.parent.parent`` (as we did historically) points the GUI at
+    a transient location that disappears the moment the EXE exits. The
+    launcher, by contrast, writes state files next to ``sys.executable`` —
+    the EXE's own directory, which IS persistent. Mirror that here.
+    """
+    import sys as _sys
+    if getattr(_sys, "frozen", False):
+        return Path(_sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+PROJECT_ROOT = _resolve_app_root()
 LOG_PATH = PROJECT_ROOT / "mail_lobster_imap.log"
 HEARTBEAT_PATH = PROJECT_ROOT / "state" / "heartbeat"
 LAUNCHER_HEARTBEAT_PATH = PROJECT_ROOT / "state" / "launcher.heartbeat"
@@ -166,13 +182,16 @@ class MainWindow(QMainWindow):
         self._daemon_controls.add_mailbox_clicked.connect(self._on_add_mailbox)
 
     def _start_timers(self) -> None:
+        # Runtime/heartbeat card ticks every 2s (was 1s — too chatty on
+        # low-end hardware, contributes to "卡顿" reports). Daemon status
+        # + mailbox/reports tables refresh every 5s.
         self._second_timer = QTimer(self)
-        self._second_timer.setInterval(1000)
+        self._second_timer.setInterval(2000)
         self._second_timer.timeout.connect(self._tick_seconds)
         self._second_timer.start()
 
         self._slow_timer = QTimer(self)
-        self._slow_timer.setInterval(2000)
+        self._slow_timer.setInterval(5000)
         self._slow_timer.timeout.connect(self._tick_slow)
         self._slow_timer.start()
 
@@ -227,7 +246,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _refresh_mailboxes(self) -> None:
-        path = PROJECT_ROOT / "config_imap_forward.json"
+        path = mailbox_admin.resolve_config_path()
         if not path.exists():
             self._mailboxes_table.populate([])
             return

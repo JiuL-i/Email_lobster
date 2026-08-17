@@ -31,6 +31,59 @@ def config_path(base: Optional[os.PathLike[str] | str] = None) -> Path:
     return Path(base) / CONFIG_FILE
 
 
+def resolve_config_path() -> Path:
+    """Locate the active config file across the layouts we ship.
+
+    Priority order (first match wins):
+      1. ``$MAIL_LOBSTER_CONFIG`` env var (explicit override, mainly for tests)
+      2. ``APP_ROOT/config_imap_forward.json`` — the writable, persistent copy
+         alongside the EXE in frozen mode, or the repo root in source mode.
+      3. ``APP_ROOT/_internal/config_imap_forward.json`` — read-only fallback
+         inside the PyInstaller bundle (``_MEIPASS``/``_internal``). Some
+         older builds placed it there; we read but never write here.
+      4. ``Path.cwd() / config_imap_forward.json`` — legacy fallback for
+         scripts invoked with an explicit ``cwd=`` set to the project root.
+      5. The directory containing this ``mailbox_admin.py`` script — source
+         mode when running from a clone that isn't on ``cwd``.
+
+    The returned path always reflects the first location that already has a
+    file. When none exist, we still return location #2 so callers have a
+    canonical write target (matches where the launcher / wizard persist).
+    """
+    env_override = os.environ.get("MAIL_LOBSTER_CONFIG", "").strip()
+    if env_override:
+        candidate = Path(env_override).expanduser().resolve()
+        return candidate
+
+    # APP_ROOT = directory of the EXE in frozen mode, repo root in source.
+    # Re-derive the same way launcher.py does so the two stay aligned.
+    if getattr(sys, "frozen", False):
+        app_root = Path(sys.executable).resolve().parent
+    else:
+        app_root = Path(__file__).resolve().parent.parent
+
+    writable = app_root / CONFIG_FILE
+    if writable.exists():
+        return writable
+
+    # PyInstaller read-only fallback inside the bundle.
+    bundled = app_root / "_internal" / CONFIG_FILE
+    if bundled.exists():
+        return bundled
+
+    # Legacy / source fallbacks.
+    cwd_candidate = Path.cwd() / CONFIG_FILE
+    if cwd_candidate.exists():
+        return cwd_candidate
+
+    script_parent = Path(__file__).resolve().parent / CONFIG_FILE
+    if script_parent.exists():
+        return script_parent
+
+    # Nothing exists yet — return the canonical write target.
+    return writable
+
+
 def load_config(path: Path, retries: int = 3) -> Dict[str, Any]:
     last_error: Optional[Exception] = None
     for _ in range(retries):
@@ -76,6 +129,11 @@ def is_first_run(path: Path) -> bool:
     return any(marker in text for marker in PLACEHOLDER_MARKERS)
 
 
+def is_first_run_resolved() -> bool:
+    """is_first_run() using resolve_config_path() to also catch bundled configs."""
+    return is_first_run(resolve_config_path())
+
+
 def add_mailbox(config: Dict[str, Any], entry: Dict[str, Any]) -> List[Dict[str, Any]]:
     mapping = config.setdefault("mailbox_mapping", {})
     mailboxes: List[Dict[str, Any]] = list(mapping.get("mailboxes", []))
@@ -98,6 +156,11 @@ def add_mailbox(config: Dict[str, Any], entry: Dict[str, Any]) -> List[Dict[str,
     prefix = (entry.get("prefix") or "").strip()
     if prefix:
         new_entry["prefix"] = prefix
+    # Optional feishu contact for owner_mapping aggregation. Stored on the
+    # mailbox entry; the wizard's accept() hoists it into feishu_app.owner_mapping.
+    feishu_contact = (entry.get("feishu_contact") or "").strip()
+    if feishu_contact:
+        new_entry["feishu_contact"] = feishu_contact
     mailboxes.append(new_entry)
     mapping["mailboxes"] = mailboxes
     return mailboxes

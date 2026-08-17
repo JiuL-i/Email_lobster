@@ -1,4 +1,16 @@
-"""Cross-platform single-instance OS file lock."""
+"""Cross-platform single-instance lock.
+
+Implementation note: this module deliberately uses *only* a PID-based
+existence check on a sentinel file. We avoid OS-level file locks
+(msvcrt.locking / fcntl.flock) because PyInstaller-frozen EXEs do not
+reliably release them on abnormal exit, which causes the well-known
+"stale lock" problem ("another instance is running" when no such
+process exists). PID-based checks are also robust against `kill -9`,
+taskkill /F, and crashes.
+
+The lock file still records diagnostic metadata (PID, hostname, started_at,
+mode, argv) so the user can see *who* holds it.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +18,7 @@ import json
 import os
 import socket
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -16,7 +29,7 @@ class LockError(RuntimeError):
 
 
 class AlreadyRunningError(LockError):
-    """Raised when another process owns the lock."""
+    """Raised when another live process owns the lock."""
 
     def __init__(self, metadata: Optional[Dict[str, Any]] = None):
         self.metadata = metadata or {}
@@ -29,67 +42,118 @@ class LockUnavailableError(LockError):
     """Raised when the lock cannot be used due to an I/O or permission error."""
 
 
+def _pid_alive(pid: int) -> bool:
+    """Best-effort check whether a process is still running."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import subprocess
+
+        # tasklist.exe is a console subsystem program — without
+        # CREATE_NO_WINDOW every spawn allocates (and immediately frees)
+        # a console window. MainWindow._refresh_status calls
+        # external_daemon_alive() every 2s, which calls _pid_alive()
+        # here, which spawns tasklist — so we were flashing 30 console
+        # windows per minute for no reason.
+        kwargs: dict = {}
+        if hasattr(subprocess, "CREATE_NO_WINDOW"):
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
+        try:
+            out = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                **kwargs,
+            )
+            # out.stdout can be None if the reader thread died mid-decode
+            # (e.g. tasklist wrote GBK bytes under PYTHONUTF8=1). Treat the
+            # unknown case as "alive" to stay conservative.
+            return bool(out.stdout) and f'"{pid}"' in out.stdout
+        except (OSError, subprocess.SubprocessError, TypeError, AttributeError):
+            # Can't query — be conservative and assume alive so we don't
+            # accidentally steal someone else's lock.
+            return True
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+
+
+def _read_metadata(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        with path.open("r", encoding="utf-8") as stream:
+            value = json.load(stream)
+        return value if isinstance(value, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _write_metadata(path: Path, metadata: Dict[str, Any]) -> None:
+    """Atomically replace the lock file with the given metadata.
+
+    Uses a temp file + os.replace so a crashed write can never leave the
+    lock in a half-written state that another process might misread.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        with tmp.open("w", encoding="utf-8") as stream:
+            json.dump(metadata, stream, ensure_ascii=False)
+            stream.write("\n")
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
 class SingleInstanceLock:
-    """An OS-owned, non-blocking lock whose file is safe to retain after exit."""
+    """A PID-based single-instance lock.
+
+    Unlike the previous OS-lock implementation, this does not block the
+    file at the OS level. Instead it relies on liveness checks of the
+    recorded PID. If the recorded PID is no longer alive, the lock is
+    considered stale and the caller takes it over. If a second process
+    starts while the first is still alive, the second will see the live
+    PID and raise AlreadyRunningError.
+
+    This trades a tiny race window (a process that dies *between* our
+    liveness check and our metadata write) for the much more common
+    case of being able to recover from abnormal exits.
+    """
 
     def __init__(self, path: os.PathLike[str] | str, mode: str):
         self.path = Path(path).resolve()
         self.mode = mode
-        self._file = None
-        self._locked = False
+        self._held = False
+        self._hold_pid: Optional[int] = None
 
-    def _lock(self) -> None:
-        if sys.platform == "win32":
-            import msvcrt
-
-            self._file.seek(0)
-            msvcrt.locking(self._file.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(self._file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-    def _unlock(self) -> None:
-        if sys.platform == "win32":
-            import msvcrt
-
-            self._file.seek(0)
-            msvcrt.locking(self._file.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
-
-    def _read_metadata(self) -> Optional[Dict[str, Any]]:
-        try:
-            with self.path.open("r", encoding="utf-8") as stream:
-                value = json.load(stream)
-            return value if isinstance(value, dict) else None
-        except (OSError, ValueError):
-            return None
+    @property
+    def held(self) -> bool:
+        return self._held
 
     def acquire(self) -> "SingleInstanceLock":
-        if self._locked:
+        if self._held:
             return self
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self._file = self.path.open("a+b")
-            if self._file.seek(0, os.SEEK_END) == 0:
-                self._file.write(b" ")
-                self._file.flush()
-            self._lock()
-        except (BlockingIOError, PermissionError, OSError) as exc:
-            metadata = self._read_metadata()
-            if self._file is not None:
-                self._file.close()
-                self._file = None
-            if isinstance(exc, BlockingIOError) or (
-                sys.platform == "win32" and isinstance(exc, PermissionError)
-            ) or getattr(exc, "winerror", None) in (33, 36):
-                raise AlreadyRunningError(metadata) from exc
-            raise LockUnavailableError(f"cannot acquire lock {self.path}: {exc}") from exc
 
-        self._locked = True
+        # Reap any stale lock whose PID is no longer alive.
+        self._reap_stale_lock()
+
+        # Check whether anyone else is now alive and holding the lock.
+        prior = _read_metadata(self.path) if self.path.exists() else None
+        prior_pid = (prior or {}).get("pid") if prior else None
+        if prior_pid and int(prior_pid) != os.getpid() and _pid_alive(int(prior_pid)):
+            raise AlreadyRunningError(prior or {})
+
+        # Write our own metadata atomically.
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         metadata = {
             "pid": os.getpid(),
             "hostname": socket.gethostname(),
@@ -98,25 +162,56 @@ class SingleInstanceLock:
             "argv": sys.argv,
         }
         try:
-            self._file.seek(0)
-            self._file.truncate()
-            self._file.write(json.dumps(metadata, ensure_ascii=False).encode("utf-8"))
-            self._file.flush()
-        except OSError:
-            # Lock ownership remains valid even if diagnostics cannot be written.
-            pass
+            _write_metadata(self.path, metadata)
+        except OSError as exc:
+            raise LockUnavailableError(f"cannot write lock {self.path}: {exc}") from exc
+        self._held = True
+        self._hold_pid = os.getpid()
         return self
 
     def release(self) -> None:
-        if self._file is None:
+        # Only delete the file if it still belongs to us. This protects
+        # against a race where we released, another instance took over,
+        # and we then delete *their* lock file.
+        if not self._held:
             return
         try:
-            if self._locked:
-                self._unlock()
+            prior = _read_metadata(self.path)
+            if prior and prior.get("pid") == self._hold_pid:
+                try:
+                    self.path.unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    pass
         finally:
-            self._locked = False
-            self._file.close()
-            self._file = None
+            self._held = False
+            self._hold_pid = None
+
+    def _reap_stale_lock(self) -> None:
+        """If the lock exists but its recorded PID is dead, delete it."""
+        if not self.path.exists():
+            return
+        prior = _read_metadata(self.path)
+        if not prior:
+            # Corrupt/empty file — remove so we can write a clean one.
+            try:
+                self.path.unlink()
+            except OSError:
+                pass
+            return
+        prior_pid = prior.get("pid")
+        try:
+            prior_pid_int = int(prior_pid) if prior_pid is not None else 0
+        except (TypeError, ValueError):
+            prior_pid_int = 0
+        if prior_pid_int and not _pid_alive(prior_pid_int):
+            try:
+                self.path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
 
     def __enter__(self) -> "SingleInstanceLock":
         return self.acquire()
@@ -126,7 +221,14 @@ class SingleInstanceLock:
 
 
 def lock_path_for_script(script_file: os.PathLike[str] | str) -> Path:
-    """Return the installation-local lock path, independent of current directory."""
+    """Return the installation-local lock path, independent of current directory.
+
+    When the caller is a PyInstaller bundle (`sys.frozen` is True), the lock
+    must live alongside the EXE so it survives across launches. Otherwise
+    we anchor on the script's parent directory.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "state" / "mail_lobster.lock"
     return Path(script_file).resolve().parent / "state" / "mail_lobster.lock"
 
 
